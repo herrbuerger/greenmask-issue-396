@@ -1,0 +1,121 @@
+# Greenmask Issue #396 — Reproduction config
+# Polymorphic virtual_references with NO DATABASE FKs
+#
+# Mirrors a Rails app using belongs_to without DB constraints.
+# All relationships are virtual_references — greenmask's graph is built
+# entirely from this config.
+#
+# Graph (all virtual):
+#   accounts (subset: id = 1)
+#     → projects (account_id)
+#         → audits (project_id)
+#             → controls (audit_id)
+#         → confirmations (project_id)
+#             → confirmation_items (confirmation_id)
+#   comments (polymorphic: commentable_type/id → controls | confirmation_items)
+#
+# Expected comments after subset: 4 (ids 1,2,4,5 — account 1's data)
+# Actual:                          2 (only ConfirmationItem — bug #396)
+#
+# NOTE: pg_bin_path is written by reproduce.sh — adjust if running manually.
+
+common:
+  pg_bin_path: "PG_BIN_PATH_PLACEHOLDER"
+  tmp_dir: "/tmp/greenmask_396"
+
+log:
+  level: "info"
+  format: "text"
+
+storage:
+  type: "directory"
+  directory:
+    path: "/tmp/greenmask_396_dumps"
+
+dump:
+  pg_dump_options:
+    dbname: "host=localhost port=15432 user=postgres password=postgres dbname=gm396_source sslmode=disable"
+    jobs: 1
+
+  # All relationships as virtual references (no DB FKs exist)
+  virtual_references:
+
+    # projects → accounts
+    - schema: "public"
+      name: "projects"
+      references:
+        - schema: "public"
+          name: "accounts"
+          columns:
+            - name: "account_id"
+          not_null: true
+
+    # audits → projects
+    - schema: "public"
+      name: "audits"
+      references:
+        - schema: "public"
+          name: "projects"
+          columns:
+            - name: "project_id"
+          not_null: true
+
+    # controls → audits
+    - schema: "public"
+      name: "controls"
+      references:
+        - schema: "public"
+          name: "audits"
+          columns:
+            - name: "audit_id"
+          not_null: true
+
+    # confirmations → projects
+    - schema: "public"
+      name: "confirmations"
+      references:
+        - schema: "public"
+          name: "projects"
+          columns:
+            - name: "project_id"
+          not_null: true
+
+    # confirmation_items → confirmations
+    - schema: "public"
+      name: "confirmation_items"
+      references:
+        - schema: "public"
+          name: "confirmations"
+          columns:
+            - name: "confirmation_id"
+          not_null: true
+
+    # comments → controls (polymorphic: type = 'Control')
+    # comments → confirmation_items (polymorphic: type = 'ConfirmationItem')
+    - schema: "public"
+      name: "comments"
+      references:
+        - schema: "public"
+          name: "controls"
+          polymorphic_exprs:
+            - "public.comments.commentable_type = 'Control'"
+          columns:
+            - name: "commentable_id"
+        - schema: "public"
+          name: "confirmation_items"
+          polymorphic_exprs:
+            - "public.comments.commentable_type = 'ConfirmationItem'"
+          columns:
+            - name: "commentable_id"
+
+  transformation:
+    # Subset root: only account 1
+    - schema: "public"
+      name: "accounts"
+      subset_conds:
+        - "public.accounts.id = 1"
+
+restore:
+  pg_restore_options:
+    dbname: "host=localhost port=15432 user=postgres password=postgres dbname=gm396_target sslmode=disable"
+    jobs: 1
